@@ -25,30 +25,18 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # Cenario de teste: desativa um teste de proposito para forcar cobertura baixa
       - name: Simular cobertura baixa (cenario de teste)
         if: inputs.cenario == 'cobertura_baixa'
-        run: |
-          sed -i 's/@Test/@org.junit.jupiter.api.Disabled @Test/' src/test/java/com/example/tempconverter/TemperatureServiceTest.java
+        run: sed -i 's/@Test/@org.junit.jupiter.api.Disabled @Test/' src/test/java/com/example/tempconverter/TemperatureServiceTest.java
 
-      # Roda so "test" + relatorio (sem o goal "check" que travaria o build em 80%)
       - name: Rodar testes e gerar relatorio de cobertura
         run: mvn -B test jacoco:report
 
       - name: Calcular percentual de cobertura de linhas
         run: |
-          python3 -c "
-import csv
-missed = covered = 0
-with open('target/site/jacoco/jacoco.csv') as f:
-    for row in csv.DictReader(f):
-        missed += int(row['LINE_MISSED'])
-        covered += int(row['LINE_COVERED'])
-pct = round(100 * covered / (covered + missed), 1) if (covered + missed) else 0
-print(pct)
-" > cobertura.txt
-          echo "COVERAGE=$(cat cobertura.txt)" >> "$GITHUB_ENV"
-          echo "Cobertura calculada: $(cat cobertura.txt)%"
+          COVERAGE=$(awk -F, 'NR>1 {m+=$8; c+=$9} END {printf "%.1f", (100*c/(c+m))}' target/site/jacoco/jacoco.csv)
+          echo "COVERAGE=$COVERAGE" >> "$GITHUB_ENV"
+          echo "Cobertura calculada: ${COVERAGE}%"
 
       - name: IA decide se o pipeline avanca
         env:
