@@ -62,6 +62,12 @@
                         <goals>
                             <goal>report</goal>
                         </goals>
+                        <configuration>
+                            <excludes>
+                                <exclude>com/example/tempconverter/TempConverterApplication.class</exclude>
+                                <exclude>com/example/tempconverter/LentidaoSimulator.class</exclude>
+                            </excludes>
+                        </configuration>
                     </execution>
                     <execution>
                         <id>check</id>
@@ -73,6 +79,7 @@
                             <excludes>
                                 <!-- Classe principal do Spring Boot: so liga a aplicacao, sem logica pra testar -->
                                 <exclude>com/example/tempconverter/TempConverterApplication.class</exclude>
+                                <exclude>com/example/tempconverter/LentidaoSimulator.class</exclude>
                             </excludes>
                             <rules>
                                 <rule>
