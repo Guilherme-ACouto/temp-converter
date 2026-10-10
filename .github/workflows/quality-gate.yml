@@ -42,25 +42,24 @@ jobs:
         env:
           GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
         run: |
+          PAYLOAD=$(jq -n --arg coverage "$COVERAGE" '{
+            model: "llama-3.1-8b-instant",
+            messages: [
+              {role: "system", content: "Voce e um quality gate de pipeline CI/CD de um conversor de temperatura em Java/Spring Boot. Nunca aprove se a cobertura de testes for menor que 80%. Responda comecando exatamente com APROVADO ou BLOQUEADO, seguido de uma breve justificativa."},
+              {role: "user", content: ("Cobertura de testes de linhas: " + $coverage + "%. Minimo exigido: 80%. O codigo pode avancar no pipeline?")}
+            ]
+          }')
           RESPONSE=$(curl -s https://api.groq.com/openai/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $GROQCLOUD_API_KEY" \
-            -d '{
-              "model": "llama-3.1-8b-instant",
-              "messages": [
-                {
-                  "role": "system",
-                  "content": "Voce e um quality gate de pipeline CI/CD de um conversor de temperatura em Java/Spring Boot. Nunca aprove se a cobertura de testes for menor que 80%. Responda comecando exatamente com APROVADO ou BLOQUEADO, seguido de uma breve justificativa."
-                },
-                {
-                  "role": "user",
-                  "content": "Cobertura de testes de linhas: '"$COVERAGE"'%. Minimo exigido: 80%. O codigo pode avancar no pipeline?"
-                }
-              ]
-            }')
+            -d "$PAYLOAD")
           echo "Resposta bruta da IA:"
           echo "$RESPONSE"
-          DECISION=$(echo "$RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])")
+          DECISION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$DECISION" ]; then
+            echo "::error::A API da Groq nao retornou uma resposta valida. Veja a resposta bruta acima."
+            exit 1
+          fi
           echo "Decisao da IA:"
           echo "$DECISION"
           echo "$DECISION" > decisao.txt

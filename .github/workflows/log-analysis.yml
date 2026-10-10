@@ -12,12 +12,6 @@ jobs:
       - name: Clonar repositorio
         uses: actions/checkout@v4
 
-      - name: Ler logs
-        run: |
-          echo "LOG_CONTENT<<EOF" >> "$GITHUB_ENV"
-          cat logs/app.log >> "$GITHUB_ENV"
-          echo "EOF" >> "$GITHUB_ENV"
-
       - name: Login GitHub CLI
         run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
@@ -25,33 +19,34 @@ jobs:
         env:
           GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
         run: |
+          PAYLOAD=$(jq -n --rawfile logs logs/app.log '{
+            model: "llama-3.1-8b-instant",
+            messages: [
+              {role: "system", content: "Voce e um especialista em observabilidade e analise de logs de um conversor de temperatura Java. Se houver qualquer linha CRITICAL ou ERROR grave, responda comecando com CRITICO. Caso contrario, comece com OK."},
+              {role: "user", content: ("Analise estes logs:\n\n" + $logs)}
+            ]
+          }')
           RESPONSE=$(curl -s https://api.groq.com/openai/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $GROQCLOUD_API_KEY" \
-            -d '{
-              "model": "llama-3.1-8b-instant",
-              "messages": [
-                {
-                  "role": "system",
-                  "content": "Voce e um especialista em observabilidade e analise de logs de um conversor de temperatura Java."
-                },
-                {
-                  "role": "user",
-                  "content": "Analise estes logs e diga se existe erro critico:\n\n'"$LOG_CONTENT"'"
-                }
-              ]
-            }')
+            -d "$PAYLOAD")
+          echo "Resposta bruta da IA:"
           echo "$RESPONSE"
-          DECISION=$(echo "$RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])")
+          DECISION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$DECISION" ]; then
+            echo "::error::A API da Groq nao retornou uma resposta valida. Veja a resposta bruta acima."
+            exit 1
+          fi
+          echo "Decisao da IA:"
           echo "$DECISION"
+          echo "$DECISION" > decisao.txt
           {
             echo "## Analise de logs pela IA"
             echo '```'
-            echo "$DECISION"
+            cat decisao.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "$DECISION" > decisao.txt
-          if echo "$DECISION" | grep -qi "crítico\|critico"; then
+          if echo "$DECISION" | grep -qiE "crítico|critico"; then
             gh issue create --title "Erro critico detectado nos logs" --body-file decisao.txt
             exit 1
           fi

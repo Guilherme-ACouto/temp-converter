@@ -18,33 +18,33 @@ jobs:
         env:
           GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
         run: |
-          TRACE=$(cat traces/conversion_trace.txt | tr '\n' ' ')
+          PAYLOAD=$(jq -n --rawfile trace traces/conversion_trace.txt '{
+            model: "llama-3.1-8b-instant",
+            messages: [
+              {role: "system", content: "Voce e especialista em distributed tracing. Se houver timeout ou gargalo relevante, responda comecando com GARGALO. Caso contrario, comece com OK."},
+              {role: "user", content: ("Analise este trace e identifique gargalos:\n\n" + $trace)}
+            ]
+          }')
           RESPONSE=$(curl -s https://api.groq.com/openai/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $GROQCLOUD_API_KEY" \
-            -d '{
-              "model": "llama-3.1-8b-instant",
-              "messages": [
-                {
-                  "role": "system",
-                  "content": "Voce e especialista em distributed tracing."
-                },
-                {
-                  "role": "user",
-                  "content": "Analise este trace e identifique gargalos: '"$TRACE"'"
-                }
-              ]
-            }')
+            -d "$PAYLOAD")
+          echo "Resposta bruta da IA:"
           echo "$RESPONSE"
-          DECISION=$(echo "$RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])")
+          DECISION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$DECISION" ]; then
+            echo "::error::A API da Groq nao retornou uma resposta valida. Veja a resposta bruta acima."
+            exit 1
+          fi
+          echo "Decisao da IA:"
           echo "$DECISION"
+          echo "$DECISION" > decisao.txt
           {
             echo "## Analise de trace pela IA"
             echo '```'
-            echo "$DECISION"
+            cat decisao.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "$DECISION" > decisao.txt
           if echo "$DECISION" | grep -qiE "timeout|gargalo|crítico|critico"; then
             gh issue create --title "Gargalo detectado em trace distribuido" --body-file decisao.txt
             exit 1

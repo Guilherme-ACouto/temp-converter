@@ -19,38 +19,37 @@ jobs:
         env:
           GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
         run: |
-          METRICS=$(cat metrics/system.json)
+          PAYLOAD=$(jq -n --rawfile metrics metrics/system.json '{
+            model: "llama-3.1-8b-instant",
+            messages: [
+              {role: "system", content: "Voce e especialista em observabilidade e analise de metricas de um servico Java em producao. Se cpu, memoria, latencia ou taxa de erro estiverem em niveis perigosos, responda comecando com RISCO. Caso contrario, comece com OK."},
+              {role: "user", content: ("Analise estas metricas e diga se existe risco operacional:\n\n" + $metrics)}
+            ]
+          }')
           RESPONSE=$(curl -s https://api.groq.com/openai/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $GROQCLOUD_API_KEY" \
-            -d '{
-              "model": "llama-3.1-8b-instant",
-              "messages": [
-                {
-                  "role": "system",
-                  "content": "Voce e especialista em observabilidade e analise de metricas de um servico Java em produção."
-                },
-                {
-                  "role": "user",
-                  "content": "Analise estas metricas e diga se existe risco operacional: '"$METRICS"'"
-                }
-              ]
-            }')
+            -d "$PAYLOAD")
+          echo "Resposta bruta da IA:"
           echo "$RESPONSE"
-          DECISION=$(echo "$RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])")
+          DECISION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$DECISION" ]; then
+            echo "::error::A API da Groq nao retornou uma resposta valida. Veja a resposta bruta acima."
+            exit 1
+          fi
+          echo "Decisao da IA:"
           echo "$DECISION"
+          echo "$DECISION" > decisao.txt
           {
             echo "## Analise de metricas pela IA"
             echo '```json'
-            echo "$METRICS"
+            cat metrics/system.json
             echo '```'
             echo '```'
-            echo "$DECISION"
+            cat decisao.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "$DECISION" > decisao.txt
           if echo "$DECISION" | grep -qiE "crítico|critico|risco|grave|instável|instavel"; then
-            ISSUE_URL=$(gh issue create --title "Risco detectado nas metricas" --body-file decisao.txt)
-            echo "$ISSUE_URL"
+            gh issue create --title "Risco detectado nas metricas" --body-file decisao.txt
             exit 1
           fi
