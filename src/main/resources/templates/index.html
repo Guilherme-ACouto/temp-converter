@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt-br" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Conversor de Temperatura</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 420px; margin: 60px auto; }
+        h1 { font-size: 22px; }
+        label { display: block; margin-top: 12px; }
+        input, select { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+        button { margin-top: 16px; padding: 10px 16px; cursor: pointer; }
+        .resultado { margin-top: 20px; font-size: 18px; color: #1a7f37; }
+        .erro { margin-top: 20px; color: #c0392b; }
+    </style>
+</head>
+<body>
+    <h1>Conversor de Temperatura</h1>
+
+    <form method="post" th:action="@{/converter}">
+        <label for="valor">Valor</label>
+        <input type="number" step="any" id="valor" name="valor" th:value="${valor}" required>
+
+        <label for="direcao">Conversao</label>
+        <select id="direcao" name="direcao">
+            <option value="CtoF" th:selected="${direcao == 'CtoF'}">Celsius para Fahrenheit</option>
+            <option value="FtoC" th:selected="${direcao == 'FtoC'}">Fahrenheit para Celsius</option>
+        </select>
+
+        <button type="submit">Converter</button>
+    </form>
+
+    <p class="resultado" th:if="${resultado != null}">
+        Resultado: <span th:text="${#numbers.formatDecimal(resultado, 1, 2)}"></span>
+    </p>
+
+    <p class="erro" th:if="${erro != null}" th:text="${erro}"></p>
+</body>
+</html>
