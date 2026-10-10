@@ -1,0 +1,119 @@
+name: Deploy com IA
+
+on:
+  workflow_dispatch:
+    inputs:
+      cenario:
+        description: "Cenário de teste"
+        type: choice
+        options: [normal, com_falha]
+        default: normal
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      LIMITE_ERRO_PCT: 5   # acima disto a versão nova é reprovada
+      LIMITE_P99_MS: 800   # latência máxima aceitável (ms)
+    steps:
+      # Histórico completo: precisamos do commit anterior
+      - name: Clonar repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Java 17 e Maven
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # ESTÁVEL = commit anterior (o que está "em produção")
+      # NOVA    = código deste commit (o que queremos entregar)
+      - name: Montar a versão estável em outra pasta
+        run: git worktree add ../versao-estavel HEAD~1
+
+      - name: Compilar versão nova
+        run: mvn -B -q -DskipTests package
+
+      - name: Compilar versão estável
+        working-directory: ../versao-estavel
+        run: mvn -B -q -DskipTests package
+
+      - name: Subir versão estável (porta 8001)
+        working-directory: ../versao-estavel
+        run: |
+          JAR=$(find target -maxdepth 1 -name "*.jar" ! -name "*.original" | head -n1)
+          setsid nohup java -jar "$JAR" --server.port=8001 > "$GITHUB_WORKSPACE/estavel.log" 2>&1 &
+          echo $! > "$GITHUB_WORKSPACE/estavel.pid"
+
+      - name: Subir versão nova (porta 8002)
+        run: |
+          JAR=$(find target -maxdepth 1 -name "*.jar" ! -name "*.original" | head -n1)
+          setsid nohup java -jar "$JAR" --server.port=8002 > nova.log 2>&1 &
+          echo $! > nova.pid
+
+      - name: Esperar as duas versões responderem
+        run: |
+          for PORTA in 8001 8002; do
+            for _ in $(seq 1 30); do
+              curl -sf "http://127.0.0.1:$PORTA/" > /dev/null && break
+              sleep 1
+            done
+            curl -sf "http://127.0.0.1:$PORTA/" > /dev/null \
+              || { echo "::error::Porta $PORTA não respondeu"; cat ./*.log; exit 1; }
+          done
+
+      # Cenário de falha: derruba a versão nova (funciona em qualquer projeto)
+      - name: Simular falha na versão nova
+        if: inputs.cenario == 'com_falha'
+        run: kill -- "-$(cat nova.pid)" || true
+
+      - name: Medir a versão nova
+        run: |
+          bash scripts/medir.sh \
+            "http://127.0.0.1:8001/" \
+            "http://127.0.0.1:8002/" \
+            100 200 metricas.json
+
+      # Camada 1: regra fixa. Não alucina e não pode ser convencida.
+      - name: Gate determinístico
+        id: gate
+        run: |
+          RUIM=$(jq --argjson e "$LIMITE_ERRO_PCT" --argjson l "$LIMITE_P99_MS" \
+            '.nova.taxa_erro_pct > $e or .nova.latencia_p99_ms > $l' metricas.json)
+          if [ "$RUIM" = "true" ]; then
+            echo "resultado=reprovado" >> "$GITHUB_OUTPUT"
+            echo "::warning::Métricas acima do limite fixo"
+          else
+            echo "resultado=aprovado" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Camada 2: a IA só é consultada se a regra fixa passou
+      - name: IA decide se promove
+        id: ia
+        if: steps.gate.outputs.resultado == 'aprovado'
+        env:
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+          MODELO: openai/gpt-oss-20b
+          TAREFA: >-
+            Deploy blue/green de um conversor de temperatura Celsius/Fahrenheit em Spring Boot.
+            Limites: erro <= ${{ env.LIMITE_ERRO_PCT }}% e p99 <= ${{ env.LIMITE_P99_MS }}ms.
+            A versão nova atende ao tráfego?
+          ARQUIVO_DADOS: metricas.json
+          OPCOES: PROMOVER MANTER
+          OPCAO_SEGURA: MANTER
+        run: bash scripts/ia_decisao.sh
+
+      - name: Promover ou manter
+        env:
+          DECISAO: ${{ steps.gate.outputs.resultado == 'reprovado' && 'MANTER' || steps.ia.outputs.decisao }}
+        run: |
+          if [ "$DECISAO" = "PROMOVER" ]; then
+            echo "## ✅ Versão nova promovida" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ⛔ Versão nova reprovada: a estável continua no ar" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Deploy bloqueado"
+            exit 1
+          fi
