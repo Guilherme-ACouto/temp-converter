@@ -19,7 +19,7 @@ jobs:
           GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
         run: |
           PAYLOAD=$(jq -n --rawfile trace traces/conversion_trace.txt '{
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b",
             messages: [
               {role: "system", content: "Voce e especialista em distributed tracing. Se houver timeout ou gargalo relevante, responda comecando com GARGALO. Caso contrario, comece com OK."},
               {role: "user", content: ("Analise este trace e identifique gargalos:\n\n" + $trace)}

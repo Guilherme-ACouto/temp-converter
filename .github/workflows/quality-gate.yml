@@ -43,7 +43,7 @@ jobs:
           GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
         run: |
           PAYLOAD=$(jq -n --arg coverage "$COVERAGE" '{
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b",
             messages: [
               {role: "system", content: "Voce e um quality gate de pipeline CI/CD de um conversor de temperatura em Java/Spring Boot. Nunca aprove se a cobertura de testes for menor que 80%. Responda comecando exatamente com APROVADO ou BLOQUEADO, seguido de uma breve justificativa."},
               {role: "user", content: ("Cobertura de testes de linhas: " + $coverage + "%. Minimo exigido: 80%. O codigo pode avancar no pipeline?")}

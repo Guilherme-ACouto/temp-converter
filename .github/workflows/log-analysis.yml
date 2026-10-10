@@ -20,7 +20,7 @@ jobs:
           GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
         run: |
           PAYLOAD=$(jq -n --rawfile logs logs/app.log '{
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b",
             messages: [
               {role: "system", content: "Voce e um especialista em observabilidade e analise de logs de um conversor de temperatura Java. Se houver qualquer linha CRITICAL ou ERROR grave, responda comecando com CRITICO. Caso contrario, comece com OK."},
               {role: "user", content: ("Analise estes logs:\n\n" + $logs)}

@@ -20,7 +20,7 @@ jobs:
           GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
         run: |
           PAYLOAD=$(jq -n --rawfile metrics metrics/system.json '{
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b",
             messages: [
               {role: "system", content: "Voce e especialista em observabilidade e analise de metricas de um servico Java em producao. Se cpu, memoria, latencia ou taxa de erro estiverem em niveis perigosos, responda comecando com RISCO. Caso contrario, comece com OK."},
               {role: "user", content: ("Analise estas metricas e diga se existe risco operacional:\n\n" + $metrics)}
