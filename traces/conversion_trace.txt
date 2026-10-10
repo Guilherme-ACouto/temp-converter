@@ -1,0 +1,5 @@
+Frontend -> TemperatureController -> TemperatureService -> Resposta
+Tempo Frontend: 15ms
+Tempo TemperatureController: 20ms
+Tempo TemperatureService (validacao + calculo): 3100ms
+Timeout ao montar resposta para o usuario

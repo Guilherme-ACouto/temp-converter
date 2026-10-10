@@ -1,0 +1,57 @@
+name: IA analisando logs
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  analisar-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Ler logs
+        run: |
+          echo "LOG_CONTENT<<EOF" >> "$GITHUB_ENV"
+          cat logs/app.log >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+
+      - name: Login GitHub CLI
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: IA analisa logs
+        env:
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+        run: |
+          RESPONSE=$(curl -s https://api.groq.com/openai/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $GROQCLOUD_API_KEY" \
+            -d '{
+              "model": "llama-3.1-8b-instant",
+              "messages": [
+                {
+                  "role": "system",
+                  "content": "Voce e um especialista em observabilidade e analise de logs de um conversor de temperatura Java."
+                },
+                {
+                  "role": "user",
+                  "content": "Analise estes logs e diga se existe erro critico:\n\n'"$LOG_CONTENT"'"
+                }
+              ]
+            }')
+          echo "$RESPONSE"
+          DECISION=$(echo "$RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])")
+          echo "$DECISION"
+          {
+            echo "## Analise de logs pela IA"
+            echo '```'
+            echo "$DECISION"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$DECISION" > decisao.txt
+          if echo "$DECISION" | grep -qi "crítico\|critico"; then
+            gh issue create --title "Erro critico detectado nos logs" --body-file decisao.txt
+            exit 1
+          fi

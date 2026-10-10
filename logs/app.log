@@ -1,0 +1,6 @@
+INFO Aplicacao iniciada
+INFO Requisicao de conversao recebida: 25.0 C para F
+INFO Conversao realizada com sucesso: 25.0 C = 77.0 F
+WARNING Tempo de resposta elevado na conversao
+ERROR Parametro de direcao invalido recebido na requisicao
+CRITICAL Falha ao processar conversao: valor de temperatura abaixo do zero absoluto

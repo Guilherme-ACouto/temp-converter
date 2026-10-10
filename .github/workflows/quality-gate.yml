@@ -1,0 +1,104 @@
+name: Quality Gate com IA
+on:
+  workflow_dispatch:
+    inputs:
+      cenario:
+        description: "Cenario de teste"
+        type: choice
+        options: [normal, cobertura_baixa]
+        default: normal
+
+permissions:
+  issues: write
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # Cenario de teste: desativa um teste de proposito para forcar cobertura baixa
+      - name: Simular cobertura baixa (cenario de teste)
+        if: inputs.cenario == 'cobertura_baixa'
+        run: |
+          sed -i 's/@Test/@org.junit.jupiter.api.Disabled @Test/' src/test/java/com/example/tempconverter/TemperatureServiceTest.java
+
+      # Roda so "test" + relatorio (sem o goal "check" que travaria o build em 80%)
+      - name: Rodar testes e gerar relatorio de cobertura
+        run: mvn -B test jacoco:report
+
+      - name: Calcular percentual de cobertura de linhas
+        run: |
+          python3 -c "
+import csv
+missed = covered = 0
+with open('target/site/jacoco/jacoco.csv') as f:
+    for row in csv.DictReader(f):
+        missed += int(row['LINE_MISSED'])
+        covered += int(row['LINE_COVERED'])
+pct = round(100 * covered / (covered + missed), 1) if (covered + missed) else 0
+print(pct)
+" > cobertura.txt
+          echo "COVERAGE=$(cat cobertura.txt)" >> "$GITHUB_ENV"
+          echo "Cobertura calculada: $(cat cobertura.txt)%"
+
+      - name: IA decide se o pipeline avanca
+        env:
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+        run: |
+          RESPONSE=$(curl -s https://api.groq.com/openai/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $GROQCLOUD_API_KEY" \
+            -d '{
+              "model": "llama-3.1-8b-instant",
+              "messages": [
+                {
+                  "role": "system",
+                  "content": "Voce e um quality gate de pipeline CI/CD de um conversor de temperatura em Java/Spring Boot. Nunca aprove se a cobertura de testes for menor que 80%. Responda comecando exatamente com APROVADO ou BLOQUEADO, seguido de uma breve justificativa."
+                },
+                {
+                  "role": "user",
+                  "content": "Cobertura de testes de linhas: '"$COVERAGE"'%. Minimo exigido: 80%. O codigo pode avancar no pipeline?"
+                }
+              ]
+            }')
+          echo "Resposta bruta da IA:"
+          echo "$RESPONSE"
+          DECISION=$(echo "$RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])")
+          echo "Decisao da IA:"
+          echo "$DECISION"
+          echo "$DECISION" > decisao.txt
+          {
+            echo "## Quality Gate com IA"
+            echo "- Cobertura calculada: ${COVERAGE}%"
+            echo "- Cenario: ${{ inputs.cenario }}"
+            echo ""
+            echo "### Decisao da IA"
+            echo '```'
+            cat decisao.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if echo "$DECISION" | grep -qi "BLOQUEADO"; then
+            echo "BLOQUEADO=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Login GitHub CLI
+        if: env.BLOQUEADO == 'true'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Abrir issue e falhar o pipeline se bloqueado
+        if: env.BLOQUEADO == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --title "Quality Gate bloqueou o pipeline (cenario: ${{ inputs.cenario }})" --body-file decisao.txt
+          echo "::error::Quality Gate bloqueou o avanco do pipeline"
+          exit 1
