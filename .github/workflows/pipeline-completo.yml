@@ -32,10 +32,9 @@ jobs:
 
       - name: Calcular percentual de cobertura de linhas
         run: |
-          COVERAGE=$(awk -F, 'NR>1 {m+=$8; c+=$9} END {printf "%.1f", (100*c/(c+m))}' target/site/jacoco/jacoco.csv)
+          COVERAGE=$(awk -F, 'NR>1 && $3!="TempConverterApplication" && $3!="LentidaoSimulator" {m+=$8; c+=$9} END {printf "%.1f", (100*c/(c+m))}' target/site/jacoco/jacoco.csv)
           echo "COVERAGE=$COVERAGE" >> "$GITHUB_ENV"
-          echo "Cobertura calculada: ${COVERAGE}%"
-          cat target/site/jacoco/jacoco.csv
+          echo "Cobertura calculada (classes de negocio): ${COVERAGE}%
 
       - name: IA decide se o pipeline avanca
         env:
