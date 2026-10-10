@@ -1,0 +1,54 @@
+name: IA analisando logs (defendido)
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  analisar-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      # Troquei a chamada direta a IA por scripts/ia_decisao.sh (Tarefa 0):
+      # dados sempre entre <dados></dados>, opcoes fechadas (OK/CRITICO),
+      # formato de resposta validado e opcao segura se a IA falhar.
+      - name: IA analisa logs (via ia_decisao.sh)
+        id: ia
+        env:
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+          MODELO: openai/gpt-oss-20b
+          TAREFA: >-
+            Voce e um especialista em observabilidade de um conversor de temperatura Java.
+            Se houver qualquer linha CRITICAL ou ERROR grave nos dados, escolha CRITICO.
+            Caso contrario, escolha OK.
+          ARQUIVO_DADOS: logs/app.log
+          OPCOES: OK CRITICO
+          OPCAO_SEGURA: CRITICO
+        run: bash scripts/ia_decisao.sh
+
+      # Regra fixa independente da IA: nunca deixa passar uma linha CRITICAL de verdade,
+      # mesmo que a IA tenha sido convencida a dizer OK.
+      - name: Regra fixa (grep) - nao depende da IA
+        id: regra
+        run: |
+          if grep -q "^CRITICAL" logs/app.log; then
+            echo "resultado=CRITICO" >> "$GITHUB_OUTPUT"
+          else
+            echo "resultado=OK" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abrir issue se IA ou regra fixa detectarem problema
+        if: steps.ia.outputs.decisao == 'CRITICO' || steps.regra.outputs.resultado == 'CRITICO'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "Decisao da IA: ${{ steps.ia.outputs.decisao }}"
+            echo "Justificativa da IA: ${{ steps.ia.outputs.justificativa }}"
+            echo "Regra fixa (grep CRITICAL): ${{ steps.regra.outputs.resultado }}"
+          } > decisao.txt
+          gh issue create --title "Erro critico detectado nos logs (versao defendida)" --body-file decisao.txt
+          exit 1
