@@ -1,0 +1,168 @@
+name: Canary com IA
+
+on:
+  workflow_dispatch:
+    inputs:
+      cenario:
+        description: "Cenário de teste"
+        type: choice
+        options: [normal, com_falha, lentidao]
+        default: normal
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      LIMITE_ERRO_PCT: 5   # acima disto a versão nova é reprovada
+      LIMITE_P99_MS: 800   # latência máxima aceitável (ms)
+    steps:
+      # Histórico completo: precisamos do commit anterior
+      - name: Clonar repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Java 17 e Maven
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # ESTÁVEL = commit anterior (o que está "em produção")
+      # NOVA    = código deste commit (o que queremos entregar)
+      - name: Montar a versão estável em outra pasta
+        run: git worktree add ../versao-estavel HEAD~1
+
+      - name: Compilar versão nova
+        run: mvn -B -q -DskipTests package
+
+      - name: Compilar versão estável
+        working-directory: ../versao-estavel
+        run: mvn -B -q -DskipTests package
+
+      - name: Subir versão estável (porta 8001)
+        working-directory: ../versao-estavel
+        run: |
+          JAR=$(find target -maxdepth 1 -name "*.jar" ! -name "*.original" | head -n1)
+          setsid nohup java -jar "$JAR" --server.port=8001 > "$GITHUB_WORKSPACE/estavel.log" 2>&1 &
+          echo $! > "$GITHUB_WORKSPACE/estavel.pid"
+
+      # Trecho F: no cenário "lentidao" a versão nova recebe SIMULAR_LENTIDAO=1
+      # e fica mais lenta a cada requisição
+      - name: Subir versão nova (porta 8002)
+        env:
+          SIMULAR_LENTIDAO: ${{ inputs.cenario == 'lentidao' && '1' || '0' }}
+        run: |
+          JAR=$(find target -maxdepth 1 -name "*.jar" ! -name "*.original" | head -n1)
+          setsid nohup java -jar "$JAR" --server.port=8002 > nova.log 2>&1 &
+          echo $! > nova.pid
+
+      - name: Esperar as duas versões responderem
+        run: |
+          for PORTA in 8001 8002; do
+            for _ in $(seq 1 30); do
+              curl -sf "http://127.0.0.1:$PORTA/" > /dev/null && break
+              sleep 1
+            done
+            curl -sf "http://127.0.0.1:$PORTA/" > /dev/null \
+              || { echo "::error::Porta $PORTA não respondeu"; cat ./*.log; exit 1; }
+          done
+
+      # Cenário de falha: derruba a versão nova (funciona em qualquer projeto)
+      - name: Simular falha na versão nova
+        if: inputs.cenario == 'com_falha'
+        run: kill -- "-$(cat nova.pid)" || true
+
+      # Trecho G: Canary com rollback imediato e preditivo
+      - name: Canary release
+        id: canary
+        env:
+          GROQCLOUD_API_KEY: ${{ secrets.GROQCLOUD_API_KEY }}
+          MODELO: openai/gpt-oss-20b
+          IA_RESUMO: "0"
+        run: |
+          echo "[]" > historico.json
+          {
+            echo "## 🐤 Canary"
+            echo "| Etapa | Erro | p99 | Ação | Análise da IA |"
+            echo "|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for PCT in 10 50 100; do
+            bash scripts/medir.sh "http://127.0.0.1:8001/" "http://127.0.0.1:8002/" "$PCT" 200 etapa.json
+            # O histórico acumulado é o que permite à IA enxergar TENDÊNCIA
+            jq -s '.[0] + [.[1]]' historico.json etapa.json > h.tmp
+            mv h.tmp historico.json
+            ERRO=$(jq '.nova.taxa_erro_pct' etapa.json)
+            P99=$(jq '.nova.latencia_p99_ms' etapa.json)
+
+            # 1) ROLLBACK IMEDIATO: limite fixo estourado, sem consultar a IA
+            RUIM=$(jq --argjson e "$LIMITE_ERRO_PCT" --argjson l "$LIMITE_P99_MS" \
+              '.nova.taxa_erro_pct > $e or .nova.latencia_p99_ms > $l' etapa.json)
+            if [ "$RUIM" = "true" ]; then
+              echo "| $PCT% | $ERRO% | $P99 ms | 🛑 rollback imediato | não consultada |" \
+                >> "$GITHUB_STEP_SUMMARY"
+              { echo "rollback=true"
+                echo "motivo=Limite fixo estourado com $PCT% do tráfego"; } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # 2) ROLLBACK PREDITIVO: a IA analisa a série de etapas
+            JUST="—"
+            if [ "$PCT" -lt 100 ]; then
+              TAREFA="Canary release. Os dados são o histórico das etapas
+                (pct_nova = % do tráfego na versão nova).
+                Limites: erro <= ${LIMITE_ERRO_PCT}% e p99 <= ${LIMITE_P99_MS}ms.
+                Se o erro ou a latência da versão nova estiverem subindo de forma
+                consistente e se aproximando do limite, a ponto de estourá-lo nas
+                próximas etapas, escolha ROLLBACK mesmo que o limite ainda não
+                tenha sido atingido. Variações de poucos milissegundos longe do
+                limite são ruído normal: nesse caso, ou se estiver estável,
+                escolha CONTINUAR."
+              ARQUIVO_DADOS=historico.json OPCOES="CONTINUAR ROLLBACK" OPCAO_SEGURA=ROLLBACK \
+                TAREFA="$TAREFA" bash scripts/ia_decisao.sh
+              JUST=$(cat ia_justificativa.txt)
+              if [ "$(cat ia_decisao.txt)" != "CONTINUAR" ]; then
+                echo "| $PCT% | $ERRO% | $P99 ms | ⚠️ rollback preditivo | $JUST |" \
+                  >> "$GITHUB_STEP_SUMMARY"
+                { echo "rollback=true"
+                  echo "motivo=IA previu degradação com $PCT% do tráfego"; } >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            echo "| $PCT% | $ERRO% | $P99 ms | ✅ avança | $JUST |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "rollback=false" >> "$GITHUB_OUTPUT"
+
+      # Trecho H: logo depois do Trecho G
+      - name: Executar rollback
+        if: steps.canary.outputs.rollback == 'true'
+        env:
+          MOTIVO: ${{ steps.canary.outputs.motivo }}
+        run: |
+          # Devolve 100% do tráfego à estável e confirma que ela está saudável
+          bash scripts/medir.sh "http://127.0.0.1:8001/" \
+            "http://127.0.0.1:8002/" 0 100 pos_rollback.json
+          ERRO=$(jq '.estavel.taxa_erro_pct' pos_rollback.json)
+          {
+            echo "### ↩️ Rollback executado"
+            echo "- Motivo: $MOTIVO"
+            echo "- Versão estável após o rollback: erro de ${ERRO}%"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Rollback: $MOTIVO"
+          exit 1
+
+      # Opcional: registra o incidente (exige "permissions: issues: write")
+      - name: Abrir issue do incidente
+        if: failure() && steps.canary.outputs.rollback == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MOTIVO: ${{ steps.canary.outputs.motivo }}
+        run: |
+          gh issue create --title "Rollback automático do deploy (canary)" \
+            --body "Motivo: $MOTIVO. Detalhes: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
