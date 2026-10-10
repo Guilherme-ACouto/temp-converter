@@ -33,7 +33,13 @@ jobs:
           echo "$RESPONSE"
           DECISION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
           if [ -z "$DECISION" ]; then
-            echo "::error::A API da Groq nao retornou uma resposta valida. Veja a resposta bruta acima."
+            echo "::error::A API da Groq nao retornou uma resposta valida."
+            {
+              echo "## Erro na chamada a API da Groq"
+              echo '```json'
+              echo "$RESPONSE"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           echo "Decisao da IA:"
