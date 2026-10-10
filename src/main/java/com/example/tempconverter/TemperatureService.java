@@ -17,7 +17,7 @@ public class TemperatureService {
             throw new IllegalArgumentException(
                 "Temperatura abaixo do zero absoluto (-273.15C) e fisicamente impossivel");
         }
-        return celsius * 9.0 / 5.0 + 32;
+        return celsius * 9.0 / 5.0 - 32;
     }
 
     public double fahrenheitParaCelsius(double fahrenheit) {
